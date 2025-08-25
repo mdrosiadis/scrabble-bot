@@ -76,7 +76,6 @@ LETTER_DATA = [
 
 def get_cell_style(cell: Cell):
     style = Fore.WHITE  + Style.DIM
-    back = ""
 
     match cell:
         case Cell.SIMPLE:
@@ -91,7 +90,6 @@ def get_cell_style(cell: Cell):
             style = Style.BRIGHT + Fore.BLACK + Back.RED
 
     return style
-            
 
 
 def render_board():
