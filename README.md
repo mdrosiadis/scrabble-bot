@@ -1,0 +1,2 @@
+# scrabble-bot
+Scrabble bot
