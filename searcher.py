@@ -17,17 +17,72 @@ class TrieNode:
     parent: int
     edges: dict[str, int]
 
+
+@dataclass
+class PlayLetter:
+    letter: str
+    wildcard_letter: str = ""
+
+    @property
+    def real_letter(self):
+        if self.letter == '*':
+            return self.wildcard_letter
+
+        return self.letter
+
+
+PlayWord = list[PlayLetter]
+
+def playword_to_str(play_word: PlayWord) -> str:
+    return "".join(pl.real_letter for pl in play_word)
+
+@dataclass
+class QueryUpResult:
+    prefix: PlayWord
+    jumps: list[str]
+
+
 @dataclass
 class QueryResult:
     start_index: int
-    word: str
+    word: PlayWord
 
     def __hash__(self):
-        return hash(f"{self.start_index}{self.word}")
+        rw = ''.join(l.real_letter for l in self.word)
+        return hash(f"{self.start_index}{rw}")
+
+
+def get_jump_letter(letter_to_get: str, jumps: list[str]) -> str|None:
+    """Return the letter used to jump to `letter_to_get`, else None"""
+    if letter_to_get in jumps:
+        return letter_to_get
+
+    elif "*" in jumps:
+        return "*"
+
+    else:
+        return None
+
+
+def fulfills_query(letter: str, query_letter: str):
+    return query_letter.isspace() or letter == query_letter # or letter == '*'
+
+def debug_print_q_starts(q, s):
+    qu_p = q.replace(' ', '.')
+    points = [' '] * len(qu_p)
+    for entry in s:
+        points[entry] = '^'
+
+    points_s = ''.join(points)
+
+    print(qu_p)
+    print(points_s)
+
 
 class Trie:
 
     def __init__(self):
+        self.wordset = set()
         self.nodes: list[TrieNode] = []
         self.node_tracker: dict[str, list[int]] = dict()
 
@@ -58,6 +113,7 @@ class Trie:
 
 
     def add(self, word):
+        self.wordset.add(word)
         current = self.nodes[0] # root
 
         for letter in word:
@@ -71,11 +127,11 @@ class Trie:
         current.terminal = True
 
 
-    def query(self, qu: str, jumps: str) -> list[QueryResult]:
+
+    def _find_starts(self, query: str) -> list[int]:
         starts = []
-        qu = qu.replace(".", " ")
         cur_entry = -1
-        for i, l in enumerate(qu):
+        for i, l in enumerate(query):
             if not l.isspace():
                 cur_entry = i
             else:
@@ -86,30 +142,130 @@ class Trie:
         if cur_entry != -1:
             starts.append(cur_entry)
 
+        return starts
+    
+    def _query_up(self, node: TrieNode, query: str, query_start: int, jumps: list[str]) -> QueryUpResult|None:
 
-        def debug_print_q_starts(q, s):
-            qu_p = q.replace(' ', '.')
-            points = [' '] * len(qu_p)
-            for entry in s:
-                points[entry] = '^'
+        # prune big branches we wont fit
+        if node.depth > query_start + 1:
+            return None
 
-            points_s = ''.join(points)
+        our_jumps = jumps.copy()
 
-            print(qu_p)
-            print(points_s)
+        # first walk up
+        failed_up = False
+        query_index = query_start
+        prefix_builder: PlayWord = [PlayLetter(letter=node.letter)]
+            # node.letter]
 
+        while node.parent != 0:
+            query_index -= 1
+            parent_node = self.nodes[node.parent]
 
-        def get_jump_letter(letter_to_get: str, jumps: list[str]) -> str|None:
-            """Return the letter used to jump to `letter_to_get`, else None"""
-            if letter_to_get in jumps:
-                return letter_to_get
-
-            elif "*" in jumps:
-                return "*"
-
-            else:
+            # if out of bounds of query, stop searching
+            if query_index < 0:
                 return None
 
+
+            query_letter = query[query_index]
+            # if query has another fixed letter up and we
+            # do not match, stop searching
+            if not fulfills_query(parent_node.letter, query_letter):
+                return None
+
+            # if next query up is space, we should just have
+            # an available jump
+            jmp = parent_node.letter
+            if query_letter.isspace():
+                jmp = get_jump_letter(parent_node.letter, our_jumps)
+                if jmp is None:
+                    return None
+
+                our_jumps.remove(jmp)
+
+
+            prefix_builder.append(PlayLetter(letter=jmp, wildcard_letter=parent_node.letter))
+            node = parent_node
+
+
+        if failed_up:
+            return None
+
+        # if we found the root, we need
+        # to check for query boundaries
+        left_nei_pos = query_start-len(prefix_builder)
+        if left_nei_pos >= 0 and not query[left_nei_pos].isspace():
+            return None
+
+        prefix = prefix_builder[::-1][:-1]
+
+        return QueryUpResult(prefix=prefix, jumps=our_jumps)
+
+
+    def _query_down(self, node: TrieNode, query: str, query_start: int, jumps: list[str], initial_jumps: list[str]) -> list[PlayWord]:
+        results = []
+
+        def dfs_down(node: TrieNode, jumps: list[str], prefix: PlayWord, query_index:int):
+            nonlocal results
+
+            if node.terminal and jumps != initial_jumps:
+                results.append(prefix)
+
+            query_index += 1
+            if query_index >= len(query):
+                return
+
+            query_letter = query[query_index]
+
+
+            for edge_letter, next_node_idx in node.edges.items():
+                if not fulfills_query(edge_letter, query_letter):
+                    continue
+
+                new_jumps = jumps.copy()
+                jmp_letter = edge_letter
+                if query_letter.isspace():
+                    jmp_letter = get_jump_letter(edge_letter, jumps)
+                    if jmp_letter is None:
+                        continue
+
+                    new_jumps.remove(jmp_letter)
+
+                play_letter = PlayLetter(letter=jmp_letter, wildcard_letter=edge_letter)
+                new_prefix  = prefix + [play_letter]
+                next_node = self.nodes[next_node_idx]
+                dfs_down(next_node, new_jumps, new_prefix, query_index)
+
+
+        dfs_down(node, jumps, [], query_start)
+
+        # check for boundaries with query
+        valid_results = []
+
+        for suffix in results:
+            right_nei_idx = query_start + len(suffix) + 1
+
+            if right_nei_idx >= len(query) or query[right_nei_idx].isspace():
+                valid_results.append(suffix)
+
+        return valid_results
+
+
+
+
+    def query(self, qu: str, jumps: str|list[str]) -> list[QueryResult]:
+        """Query the trie"""
+
+        # support both " " and "." for empty space
+        qu = qu.replace(".", " ")
+        starts = self._find_starts(qu)
+
+        if len(starts) == 0:
+            # TODO: this is an empty query (first word)
+            pass
+
+        if isinstance(jumps, str):
+            jumps = list(jumps)
 
         all_results = []
 
@@ -124,126 +280,46 @@ class Trie:
             for start_node in nodes:
                 node = self.nodes[start_node]
 
-                # prune big branches we wont fit
-                if node.depth > start + 1:
+                result_up = self._query_up(node, qu, start, jumps)
+                
+                if result_up is None:
                     continue
 
-                our_jumps = list(jumps)
-
-                # first walk up
-                failed_up = False
-                query_index = start
-                prefix_builder = [node.letter]
-
-                while node.parent != 0:
-                    query_index -= 1
-                    parent_node = self.nodes[node.parent]
-
-                    # if out of bounds of query, stop searching
-                    if query_index < 0:
-                        failed_up = True
-                        break
-
-
-                    query_letter = qu[query_index]
-                    # if query has another fixed letter up and we
-                    # do not match, stop searching
-                    if not query_letter.isspace() and query_letter != parent_node.letter:
-                        failed_up = True
-                        break
-
-                    # if next query up is space, we should just have
-                    # an available jump
-                    jmp = parent_node.letter
-                    if query_letter.isspace():
-                        jmp = get_jump_letter(parent_node.letter, our_jumps)
-                        if jmp is None:
-                            failed_up = True
-                            break
-
-                        our_jumps.remove(jmp)
-
-
-                    prefix_builder.append(jmp)
-                    node = parent_node
-
-
-                if failed_up:
-                    continue
-
-                # if we found the root, we need
-                # to check for query boundaries
-                left_nei_pos = start-len(prefix_builder)
-                if left_nei_pos >= 0 and not qu[left_nei_pos].isspace():
-                    continue
-
-                prefix = "".join(prefix_builder[::-1])[:-1]
-
-                # now check going down (dfs)
-                results = []
-                def dfs_down(node: TrieNode, jumps: list[str], prefix: str, query_index:int):
-                    nonlocal results
-                    # prefix += node.letter
-
-                    if node.terminal:
-                        results.append(prefix)
-
-                    query_index += 1
-                    if query_index >= len(qu):
-                        return
-
-                    query_letter = qu[query_index]
-
-
-                    def fulfills_query(letter: str, query_letter: str):
-                        return query_letter.isspace() or letter == query_letter # or letter == '*'
-
-                    for edge_letter, next_node_idx in node.edges.items():
-                        if not fulfills_query(edge_letter, query_letter):
-                            continue
-
-                        new_jumps = jumps.copy()
-                        jmp_letter = edge_letter
-                        if query_letter.isspace():
-                            jmp_letter = get_jump_letter(edge_letter, jumps)
-                            if jmp_letter is None:
-                                continue
-
-                            new_jumps.remove(jmp_letter)
-
-                        next_node = self.nodes[next_node_idx]
-                        dfs_down(next_node, new_jumps, prefix+jmp_letter, query_index)
-
-
+                prefix = result_up.prefix
+                remaining_jumps = result_up.jumps
 
                 node = self.nodes[start_node]
-                query_index = start
-                dfs_down(node, our_jumps, "", query_index)
+                results = self._query_down(node, qu, start, remaining_jumps, jumps)
 
-                for sufix in results:
-                    # check for boundaries with query
-                    right_nei_idx = start + len(sufix) + 1
-                    if right_nei_idx >= len(qu) or qu[right_nei_idx].isspace():
-                        word = prefix + qu[query_index] + sufix
-                        all_results.append(QueryResult(start-len(prefix), word))
+
+                for suffix in results:
+                    word = prefix + [PlayLetter(letter=qu[start])] + suffix
+                    all_results.append(QueryResult(start-len(prefix), word))
 
 
         all_results = list(set(all_results))
 
-        print()
-        print(f"-------- {len(all_results):5d} RESULTS -------")
-        print()
+        if True:
+            print()
+            print(f"-------- {len(all_results):5d} RESULTS     --------")
+            print()
 
-        print()
-        print(qu.replace(" ", "."), "\t\tAvailable letters:", jumps)
-        for qr in all_results:
-            print(" " * qr.start_index + qr.word)
+            print()
+            print(qu.replace(" ", "."), "\t\tAvailable letters:", ''.join(sorted(jumps)))
+            for qr in all_results:
+                real_word = "".join(pl.real_letter for pl in qr.word)
+                play_word = "".join(pl.letter for pl in qr.word)
+
+                t = " " * qr.start_index + play_word
+                print(t, end=" "*(len(qu) - len(t)))
+
+                if "*" in play_word:
+                    print(f"\t({real_word})", end="")
+
+                print()
 
 
         return all_results
-
-
-
 
 
 
@@ -253,9 +329,9 @@ class Trie:
 
 
 
-t = Trie()
+def create_greek_trie():
+    t = Trie()
 
-if 1:
     t0 = time.time()
     with open("wordlist.txt", encoding="utf-8") as f:
         for line in f:
@@ -264,9 +340,10 @@ if 1:
 
     diff = time.time() - t0
     print(f"Creating trie took {diff:.2f}s")
-else:
-    t.add("testing")
-    t.add("ping")
-    t.add("est")
-    t.add("test")
-    t.query("   t   ", "tttteeeessiiing")
+
+    return t
+
+if __name__ == "__main__":
+    T = create_greek_trie()
+
+
