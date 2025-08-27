@@ -360,8 +360,6 @@ def query_v2(game_board: Board, rc_idx: int, dir: Orientation, jumps: str|list[s
         starts.append(cur_entry)
 
 
-    print(starts)
-
 
     def valid_pos(x: int, y:int) -> bool:
         return x >= 0 and x < BOARD_SIZE and y >= 0 and y < BOARD_SIZE
@@ -727,6 +725,17 @@ def find_words(game_board, letters: str) -> list[PositionedWord]:
     return results
 
 
+def find_words_2(game_board: Board, letters: str):
+    letters_l = list(letters)
+    results = []
+    for i in range(BOARD_SIZE):
+        results.extend(query_v2(game_board, i, Orientation.HORIZONTAL, letters_l))
+
+    for i in range(BOARD_SIZE):
+        results.extend(query_v2(game_board, i, Orientation.VERTICAL, letters_l))
+
+    return results
+
 
 to_play = playword_from_str("ΤΑΨΙ")
 if to_play is not None:
@@ -886,6 +895,7 @@ def demo():
         print(f"{player.name} playing. Letters: {my_letters}")
 
         best_word = get_best_word(game_board, my_letters)
+
 
         next_board = copy.deepcopy(game_board)
 

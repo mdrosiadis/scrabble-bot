@@ -299,7 +299,7 @@ class Trie:
 
         all_results = list(set(all_results))
 
-        if True:
+        if False:
             print()
             print(f"-------- {len(all_results):5d} RESULTS     --------")
             print()
