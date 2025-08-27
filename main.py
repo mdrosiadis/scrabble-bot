@@ -3,7 +3,7 @@ import enum
 import random
 import pprint
 import copy
-from typing import List, NamedTuple, OrderedDict
+from typing import NamedTuple
 from colorama import Back, Fore, Style
 import time
 
@@ -86,6 +86,7 @@ LETTER_DATA = [
 ]
 
 letter_values = {ld.letter: ld.value for ld in LETTER_DATA}
+VALID_LETTERS = sorted(list(letter_values.keys()))
 
 
 @dataclass
@@ -708,7 +709,7 @@ def find_words(game_board, letters: str) -> list[PositionedWord]:
     for y, row in enumerate(game_board):
         query = "".join(pl.real_letter for pl in row)
         ret = T.query(query, letters)
-        
+
         ret = [PositionedWord(word=w.word, start_pos=(w.start_index, y), orientation=Orientation.HORIZONTAL) for w in ret]
         results.extend(ret)
 
@@ -718,59 +719,14 @@ def find_words(game_board, letters: str) -> list[PositionedWord]:
         col = [game_board[y][x] for y in range(BOARD_SIZE)]
         query = "".join(pl.real_letter for pl in col)
         ret = T.query(query, letters)
-        
+
         ret = [PositionedWord(word=w.word, start_pos=(x, w.start_index), orientation=Orientation.VERTICAL) for w in ret]
         results.extend(ret)
 
     return results
 
 
-def find_words_2(game_board: Board, letters: str):
-    letters_l = list(letters)
-    results = []
-    for i in range(BOARD_SIZE):
-        results.extend(query_v2(game_board, i, Orientation.HORIZONTAL, letters_l))
-
-    for i in range(BOARD_SIZE):
-        results.extend(query_v2(game_board, i, Orientation.VERTICAL, letters_l))
-
-    return results
-
-
-to_play = playword_from_str("ΤΑΨΙ")
-if to_play is not None:
-    ret = play_word(game_board, to_play, (7, 5), Orientation.VERTICAL)
-
-render_board(game_board)
-
-letters = "ΚΦΣΛΟΕ"
-
-found = find_words(game_board, letters)
-
-q2 = query_v2(game_board, 6, Orientation.HORIZONTAL, letters)
-for qr in q2:
-    print(playword_to_str(qr.word))
-
-print(len(q2))
-
-
-# to_play = playword_from_str("ΤΑΨΙ")
-# if to_play is not None:
-#     ret = play_word(game_board, to_play, (7, 5), Orientation.VERTICAL)
-#
-# to_play = playword_from_str("ΤΗΓΑΝΙΑ")
-# if to_play is not None:
-#     ret = play_word(game_board, to_play, (7, 5), Orientation.HORIZONTAL)
-#
-
-# for _ in range(3):
-#     print()
-#
-#
-# render_board(game_board)
-
-
-def get_best_word(game_board, letters):
+def get_words_sorted(game_board, letters):
     t0 = time.time()
     found = find_words(game_board, letters)
     diff = time.time() - t0
@@ -795,13 +751,55 @@ def get_best_word(game_board, letters):
 
 
     rank = 0
-    TOP_N = 3
+    TOP_N = len(found_scores)
+    out = []
     for pw, score in found_scores[:TOP_N]:
         rank += 1
         word = playword_to_str(pw.word)
-        print(f"{rank:4d}) {word:15s} (Points: {score:3d})  / Pos: {pw.start_pos} {pw.orientation}")
+        desc = f"{rank:4d}) {word:15s} (Points: {score:3d})  / Pos: {pw.start_pos} {pw.orientation}"
+        out.append((pw, score, desc))
+        print(desc)
 
-    return found_scores[0][0]
+    return out
+    #return found_scores[0][0]
+
+
+def get_best_word(game_board, letters):
+    return get_words_sorted(game_board, letters)[0][0]
+
+if __name__ == "__main__":
+
+    to_play = playword_from_str("ΤΑΨΙ")
+    if to_play is not None:
+        ret = play_word(game_board, to_play, (7, 5), Orientation.VERTICAL)
+
+    render_board(game_board)
+
+    letters = "ΚΦΣΛΟΕ"
+
+    found = find_words(game_board, letters)
+
+    q2 = query_v2(game_board, 6, Orientation.HORIZONTAL, letters)
+    for qr in q2:
+        print(playword_to_str(qr.word))
+
+
+
+# to_play = playword_from_str("ΤΑΨΙ")
+# if to_play is not None:
+#     ret = play_word(game_board, to_play, (7, 5), Orientation.VERTICAL)
+#
+# to_play = playword_from_str("ΤΗΓΑΝΙΑ")
+# if to_play is not None:
+#     ret = play_word(game_board, to_play, (7, 5), Orientation.HORIZONTAL)
+#
+
+# for _ in range(3):
+#     print()
+#
+#
+# render_board(game_board)
+
 
 
 
@@ -834,9 +832,9 @@ def remove_letter_from_list(letter, letter_list):
     remove_index = None
     for i, ll in enumerate(letter_list):
         if letter == ll.letter:
-            remove_index = i 
+            remove_index = i
             break
-   
+
     assert remove_index is not None, "Played a letter we didnt have?!"
     letter_list.pop(remove_index)
 
@@ -859,7 +857,7 @@ def demo():
 
 
     random.shuffle(letter_bag)
-    
+
     game_board = create_empty_board()
 
 

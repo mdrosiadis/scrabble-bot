@@ -67,6 +67,11 @@ def get_jump_letter(letter_to_get: str, jumps: list[str]) -> str|None:
 def fulfills_query(letter: str, query_letter: str):
     return query_letter.isspace() or letter == query_letter # or letter == '*'
 
+
+def get_counts(dct):
+    return {a:len(b) for a, b in dct.items()}
+
+
 def debug_print_q_starts(q, s):
     qu_p = q.replace(' ', '.')
     points = [' '] * len(qu_p)
@@ -86,6 +91,7 @@ class Trie:
         self.nodes: list[TrieNode] = []
         self.node_tracker: dict[str, list[int]] = dict()
 
+        self.collapsed = set()
         # create root node
         self.nodes.append(TrieNode("", index=0, depth=0, terminal=False, parent=-1, edges=dict()))
 
@@ -143,7 +149,8 @@ class Trie:
             starts.append(cur_entry)
 
         return starts
-    
+
+
     def _query_up(self, node: TrieNode, query: str, query_start: int, jumps: list[str]) -> QueryUpResult|None:
 
         # prune big branches we wont fit
@@ -253,7 +260,7 @@ class Trie:
 
 
 
-    def query(self, qu: str, jumps: str|list[str]) -> list[QueryResult]:
+    def query(self, qu: str, jumps: str|list[str], speed_up=True, print_out=False) -> list[QueryResult]:
         """Query the trie"""
 
         # support both " " and "." for empty space
@@ -275,13 +282,24 @@ class Trie:
             if starting_letter not in self.node_tracker:
                 continue
 
-            nodes = self.node_tracker[starting_letter]
+            # speed up to bigger nodes
+            if speed_up:
+                i = start
+                while i >= 0 and qu[i:start+1] in self.node_tracker:
+                    i -= 1
+
+                query_key = qu[i+1:start+1]
+
+            else:
+                query_key = starting_letter
+
+            nodes = self.node_tracker[query_key]
 
             for start_node in nodes:
                 node = self.nodes[start_node]
 
-                result_up = self._query_up(node, qu, start, jumps)
-                
+                result_up = self._query_up(node, qu, start-len(query_key)+1, jumps)
+
                 if result_up is None:
                     continue
 
@@ -289,17 +307,20 @@ class Trie:
                 remaining_jumps = result_up.jumps
 
                 node = self.nodes[start_node]
+                for step in query_key[1:]:
+                    node = self.nodes[node.edges[step]]
+
                 results = self._query_down(node, qu, start, remaining_jumps, jumps)
 
 
                 for suffix in results:
-                    word = prefix + [PlayLetter(letter=qu[start])] + suffix
-                    all_results.append(QueryResult(start-len(prefix), word))
+                    word = prefix + [PlayLetter(letter=l) for l in query_key] + suffix
+                    all_results.append(QueryResult(start-len(prefix) - len(query_key) + 1, word))
 
 
         all_results = list(set(all_results))
 
-        if False:
+        if print_out:
             print()
             print(f"-------- {len(all_results):5d} RESULTS     --------")
             print()
@@ -322,6 +343,38 @@ class Trie:
         return all_results
 
 
+    def _parent_letter(self, idx):
+        return self.nodes[self.nodes[idx].parent].letter
+
+
+    def _collapse_entry(self, key):
+        self.collapsed.add(key)
+
+        new_d = {}
+        for idx in self.node_tracker[key]:
+            pl = self._parent_letter(idx)
+            nk = pl + key
+            if nk == key:
+                continue
+
+            if nk not in new_d:
+                new_d[nk] = []
+
+            new_d[nk].append(self.nodes[idx].parent)
+
+        return new_d
+
+
+    def collapse_once(self):
+        counts = get_counts(self.node_tracker)
+        keys = set(counts.keys())
+
+        collapsible_keys = keys - self.collapsed
+
+        max_key = max(collapsible_keys, key=lambda x:counts[x])
+        new_keys = self._collapse_entry(max_key)
+
+        self.node_tracker.update(new_keys)
 
 
     def __str__(self):
@@ -329,7 +382,7 @@ class Trie:
 
 
 
-def create_greek_trie():
+def create_greek_trie(n_colapses=0):
     t = Trie()
 
     t0 = time.time()
@@ -341,9 +394,58 @@ def create_greek_trie():
     diff = time.time() - t0
     print(f"Creating trie took {diff:.2f}s")
 
+    for _ in range(n_colapses):
+        t.collapse_once()
+
     return t
+
+
 
 if __name__ == "__main__":
     T = create_greek_trie()
+
+    parent_letter = lambda idx: T.nodes[T.nodes[idx].parent].letter
+
+    collapsed = set()
+
+    def collapse_entry(dct, key):
+        global collapsed
+
+        collapsed.add(key)
+
+        new_d = {}
+        for idx in dct[key]:
+            pl = parent_letter(idx)
+            nk = pl + key
+            if nk == key:
+                continue
+
+            if nk not in new_d:
+                new_d[nk] = []
+
+            new_d[nk].append(T.nodes[idx].parent)
+
+        # print(get_counts(new_d))
+        return new_d
+
+    def collapse_once(dct: dict):
+        counts = get_counts(dct)
+
+        keys = set(counts.keys())
+        collapsible_keys = keys - collapsed
+
+        max_key = max(collapsible_keys, key=lambda x:counts[x])
+
+
+        new_keys = collapse_entry(dct, max_key)
+
+        dct.update(new_keys)
+
+        # counts = get_counts(dct)
+        # print(counts)
+
+
+    for i in range(15):
+        collapse_once(T.node_tracker)
 
 
