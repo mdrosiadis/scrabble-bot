@@ -1,14 +1,13 @@
 from dataclasses import dataclass
 import enum
-from os import remove, set_inheritable
 import random
 import pprint
 import copy
-from typing import List, NamedTuple
+from typing import List, NamedTuple, OrderedDict
 from colorama import Back, Fore, Style
 import time
 
-from searcher import PlayWord, PlayLetter, QueryResult, fulfills_query, create_greek_trie, playword_to_str
+from searcher import PlayWord, PlayLetter, QueryResult, fulfills_query, create_greek_trie, playword_to_str, get_jump_letter, TrieNode
 
 BOARD_SIZE = 15
 
@@ -60,7 +59,7 @@ BOARD = [
 
 LETTER_DATA = [
     LetterData('Α', n_count=12, value= 1),
-    LetterData('B', n_count= 1, value= 8),
+    LetterData('Β', n_count= 1, value= 8),
     LetterData('Γ', n_count= 2, value= 4),
     LetterData('Δ', n_count= 2, value= 4),
     LetterData('Ε', n_count= 8, value= 1),
@@ -114,7 +113,9 @@ def get_cell_style(cell: Cell):
     return style
 
 
-def create_empty_board():
+Board = list[list[PlayLetter]]
+
+def create_empty_board() -> Board:
     return [[PlayLetter(letter=" ")] * BOARD_SIZE for _ in range(BOARD_SIZE)]
 
 
@@ -135,29 +136,34 @@ class PlaceLettersResult:
     points: int
     expandable: list[tuple[PositionedLetter, Orientation]]
 
-def play_letters(game_board, letters: list[PositionedLetter], nxt=None) -> int|None:
+
+
+
+
+@dataclass
+class HalfExpandResult:
+    word: str
+    multiplier: int
+    points: int
+    player_placed: int
+
+@dataclass
+class ExpandResult:
+    word: str
+    points: int
+    is_bonus: bool = False
+
+
+def expand(game_board: Board, pos: tuple[int, int], orientation: Orientation, letters: list[PositionedLetter], visited=None, nxt=None) -> ExpandResult|None:
     pos_to_letter = {pl.pos: pl for pl in letters}
-    visited = {pl.pos: [] for pl in letters}
-    
-    for pl in letters:
-        if game_board[pl.pos[1]][pl.pos[0]].letter != " ":
-            print("Could not play")
-            return None
-        
 
-    @dataclass
-    class ExpandResult:
-        word: str
-        multiplier: int
-        points: int
-        player_placed: int
 
-    def expand(pos: tuple[int, int], orientation: Orientation, backwards: bool) -> ExpandResult:
+    def expand_half(pos: tuple[int, int], orientation: Orientation, backwards: bool) -> HalfExpandResult:
         # if this letter is expanded already this orient
         # if orientation in visited[pos]:
         #     return 
 
-        result = ExpandResult("", multiplier=1, points=0, player_placed=0)
+        result = HalfExpandResult("", multiplier=1, points=0, player_placed=0)
 
 
         step_x = 1 if orientation == orientation.HORIZONTAL else 0
@@ -185,9 +191,11 @@ def play_letters(game_board, letters: list[PositionedLetter], nxt=None) -> int|N
 
             is_board = False
 
-            if npos in visited:
-                visited[npos].append(orientation)
+            if npos in pos_to_letter:
                 letter = pos_to_letter[npos].play_letter
+
+                if visited:
+                    visited[npos].append(orientation)
 
                 if nxt:
                     nxt[cur_y][cur_x] = letter
@@ -231,6 +239,52 @@ def play_letters(game_board, letters: list[PositionedLetter], nxt=None) -> int|N
         return result
 
 
+
+
+    result = ExpandResult(word="", points=0)
+    back  = expand_half(pos, orientation, True)
+    front = expand_half(pos, orientation, False)
+
+
+    result.word = back.word + front.word
+
+
+
+    if len(result.word) < 2:
+        # not_expanded.append((pl, orient))
+        return result
+
+    if result.word not in T.wordset:
+        return None
+
+    points = back.points + front.points
+    multi = back.multiplier * front.multiplier
+    player_placed = back.player_placed + front.player_placed
+
+    result.points = points * multi
+
+    if player_placed >= 7:
+        # Bonus 50
+        result.is_bonus = True
+        result.points += 50
+
+    return result
+
+
+
+
+
+
+
+def play_letters(game_board, letters: list[PositionedLetter], nxt=None) -> PlaceLettersResult|None:
+    visited = {pl.pos: [] for pl in letters}
+    
+    for pl in letters:
+        if game_board[pl.pos[1]][pl.pos[0]].letter != " ":
+            print("Could not play")
+            return None
+        
+
     total_points = 0
 
     not_expanded = []
@@ -238,54 +292,276 @@ def play_letters(game_board, letters: list[PositionedLetter], nxt=None) -> int|N
     for pl in letters:
         # expland horizontal and vertical
         for orient in (Orientation.HORIZONTAL, Orientation.VERTICAL):
-            if orient in visited[pl.pos]:
-                continue
+            if orient in visited[pl.pos]: continue
 
-            back  = expand(pl.pos, orient, True)
-            front = expand(pl.pos, orient, False)
+            res = expand(game_board, pl.pos, orient, letters, visited=visited, nxt=nxt)
 
-            points = back.points + front.points
-            multi = back.multiplier * front.multiplier
+            if res is None:
+                return None
 
-            word = back.word + front.word
-            player_placed = back.player_placed + front.player_placed
-
-            if len(word) < 2:
+            if len(res.word) < 2:
                 not_expanded.append((pl, orient))
                 continue
 
-            # print("WORD:", word)
-            word_valid = len(word) >= 2 and word in T.wordset
-            if word_valid:
-                # print("VALID")
-                valids.append((word, points))
-            else:
-                # print("INVALID")
+            valids.append(res)
 
-                return None
+            total_points += res.points
 
 
-            word_points = points * multi
-
-            if player_placed >= 7:
-                # print("BONUS 50")
-                word_points += 50
+    return PlaceLettersResult(total_points, not_expanded)
 
 
-            # print("Points:", word_points)
+# -------------------------------------------------------------
+T = create_greek_trie()
 
-            total_points += word_points
+def find_starts(query: str) -> list[int]:
+    starts = []
+    cur_entry = -1
+    for i, l in enumerate(query):
+        if not l.isspace():
+            cur_entry = i
+        else:
+            if cur_entry != -1:
+                starts.append(cur_entry)
+            cur_entry = -1
+
+    if cur_entry != -1:
+        starts.append(cur_entry)
+
+    return starts
+
+def query_v2(game_board: Board, rc_idx: int, dir: Orientation, jumps: str|list[str]):
+    if isinstance(jumps, str):
+        jumps = list(jumps)
+
+    step_x = 1 if dir == Orientation.HORIZONTAL else 0
+    step_y = 1 if dir == Orientation.VERTICAL else 0
+
+    # find start_pos
+    x = rc_idx if dir == Orientation.VERTICAL else 0
+    y = rc_idx if dir == Orientation.HORIZONTAL else 0
+
+    starts = []
+    cur_entry = None
+    for _ in range(BOARD_SIZE):
+        bl = game_board[y][x]
+
+        if not bl.letter.isspace():
+            cur_entry = (x, y)
+        else:
+            if cur_entry is not None:
+                starts.append(cur_entry)
+            cur_entry = None
+
+        x += step_x
+        y += step_y
+
+    if cur_entry is not None:
+        starts.append(cur_entry)
 
 
-    return total_points
+    print(starts)
+
+
+    def valid_pos(x: int, y:int) -> bool:
+        return x >= 0 and x < BOARD_SIZE and y >= 0 and y < BOARD_SIZE
+
+
+    all_results = []
+
+    for start_pos in starts:
+        start_x, start_y = start_pos
+        starting_pl = game_board[start_y][start_x]
+
+        if starting_pl.real_letter not in T.node_tracker:
+            continue
+
+        nodes = T.node_tracker[starting_pl.real_letter]
+
+        if dir == Orientation.HORIZONTAL:
+            query_start = start_x
+            oposite_dir = Orientation.VERTICAL
+        else:
+            query_start = start_y
+            oposite_dir = Orientation.HORIZONTAL
+
+
+        for start_node in nodes:
+            node = T.nodes[start_node]
+
+            # going_up
+
+            # prune big branches we wont fit
+            if node.depth > query_start + 1:
+                continue
+                # return None
+
+            initial_jumps = jumps.copy()
+            our_jumps = jumps.copy()
+
+            # first walk up
+            prefix_builder: PlayWord = [PlayLetter(letter=node.letter)]
+
+            x = start_x
+            y = start_y
+
+
+            found_word = True
+            played_letters = []
+
+            while node.parent != 0:
+                x -= step_x
+                y -= step_y
+
+                parent_node = T.nodes[node.parent]
+
+                # if out of bounds of query, stop searching
+                if not valid_pos(x, y):
+                    found_word = False
+                    break
+                    # return None
+
+
+                query_letter = game_board[y][x]
+
+                # if query has another fixed letter up and we
+                # do not match, stop searching
+                if not fulfills_query(parent_node.letter, query_letter.letter):
+                    found_word = False
+                    break
+                    # return None
+
+                # if next query up is space, we should just have
+                # an available jump
+                jmp = parent_node.letter
+                if query_letter.letter.isspace():
+                    jmp = get_jump_letter(parent_node.letter, our_jumps)
+                    if jmp is None:
+                        found_word = False
+                        break
+                        # return None
+
+                    our_jumps.remove(jmp)
+
+                play_letter = PlayLetter(letter=jmp, wildcard_letter=parent_node.letter)
+                positioned_letter = PositionedLetter(play_letter=play_letter, pos=(x, y))
+
+                played_letters.append(positioned_letter)
+
+                expand_result = expand(game_board, (x, y), oposite_dir, played_letters)
+
+                if expand_result is None:
+                    found_word = False
+                    break
+
+                prefix_builder.append(play_letter)
+                node = parent_node
+
+
+            if not found_word:
+                continue
+                # return None
+
+            # if we found the root, we need
+            # to check for query boundaries
+
+            x -= step_x
+            y -= step_y
+            if valid_pos(x, y) and not game_board[y][x].letter.isspace():
+                continue
+                # return None
+
+            prefix = prefix_builder[::-1][:-1]
+
+            # return QueryUpResult(prefix=prefix, jumps=our_jumps)
+
+            # no go down
+
+            x = start_x
+            y = start_y
+
+            results = []
+
+            def dfs_down(node: TrieNode, jumps: list[str], prefix: PlayWord, pos:tuple[int, int]):
+                nonlocal results
+
+                if node.terminal and jumps != initial_jumps:
+                    results.append(prefix)
+
+                x, y = pos
+
+                x += step_x
+                y += step_y
+                
+                if not valid_pos(x, y):
+                    return
+
+                query_letter = game_board[y][x]
+
+
+                for edge_letter, next_node_idx in node.edges.items():
+                    if not fulfills_query(edge_letter, query_letter.real_letter):
+                        continue
+
+                    new_jumps = jumps.copy()
+                    jmp_letter = edge_letter
+                    if query_letter.letter.isspace():
+                        jmp_letter = get_jump_letter(edge_letter, jumps)
+                        if jmp_letter is None:
+                            continue
+
+                        new_jumps.remove(jmp_letter)
+
+                    play_letter = PlayLetter(letter=jmp_letter, wildcard_letter=edge_letter)
+                    positioned_letter = PositionedLetter(play_letter=play_letter, pos=(x, y))
+
+                    expand_result = expand(game_board, (x, y), oposite_dir, [positioned_letter])
+
+                    if expand_result is None:
+                        return
+
+                    new_prefix  = prefix + [play_letter]
+                    next_node = T.nodes[next_node_idx]
+                    dfs_down(next_node, new_jumps, new_prefix, (x, y))
+
+
+            node = T.nodes[start_node]
+            dfs_down(node, our_jumps, [], (start_x, start_y))
+
+            # check for boundaries with query
+            valid_results = []
+
+            for suffix in results:
+                last_x = start_x + (len(suffix) + 1) * step_x
+                last_y = start_y + (len(suffix) + 1) * step_y
+
+                if not valid_pos(last_x, last_y) or game_board[last_y][last_x].letter.isspace():
+                    valid_results.append(suffix)
+
+
+            start_letter = game_board[start_y][start_x]
+
+            for suffix in valid_results:
+                word = prefix + [start_letter] + suffix
+                all_results.append(QueryResult(0-len(prefix), word))
+
+
+    return all_results
+
+
+
+
+
+
+# -------------------------------------------------------------
 
 
 
 def play_word(game_board, word: PlayWord, pos: tuple[int, int], orientation: Orientation, place_letters=True) -> int|None:
     points = 0
 
-    step_x = 1 if orientation == orientation.HORIZONTAL else 0
-    step_y = 1 if orientation == orientation.VERTICAL else 0
+    step_x = 1 if orientation == Orientation.HORIZONTAL else 0
+    step_y = 1 if orientation == Orientation.VERTICAL else 0
 
 
     # dry run 
@@ -365,7 +641,7 @@ def get_positioned_word_letters(game_board, pw: PositionedWord) -> list[Position
     return result
 
 
-def play_positioned_word(game_board, pw: PositionedWord, place_letters=True, nxt=None):
+def play_positioned_word(game_board, pw: PositionedWord, place_letters=True, nxt=None) -> PlaceLettersResult|None:
     positioned_letters = get_positioned_word_letters(game_board, pw)
 
     return play_letters(game_board, positioned_letters, nxt=nxt)
@@ -426,7 +702,6 @@ def render_board(game_board):
 
 
 
-T = create_greek_trie()
 
 
 def find_words(game_board, letters: str) -> list[PositionedWord]:
@@ -453,8 +728,21 @@ def find_words(game_board, letters: str) -> list[PositionedWord]:
 
 
 
+to_play = playword_from_str("ΤΑΨΙ")
+if to_play is not None:
+    ret = play_word(game_board, to_play, (7, 5), Orientation.VERTICAL)
+
 render_board(game_board)
 
+letters = "ΚΦΣΛΟΕ"
+
+found = find_words(game_board, letters)
+
+q2 = query_v2(game_board, 6, Orientation.HORIZONTAL, letters)
+for qr in q2:
+    print(playword_to_str(qr.word))
+
+print(len(q2))
 
 
 # to_play = playword_from_str("ΤΑΨΙ")
@@ -465,11 +753,12 @@ render_board(game_board)
 # if to_play is not None:
 #     ret = play_word(game_board, to_play, (7, 5), Orientation.HORIZONTAL)
 #
-for _ in range(3):
-    print()
 
-
-render_board(game_board)
+# for _ in range(3):
+#     print()
+#
+#
+# render_board(game_board)
 
 
 def get_best_word(game_board, letters):
@@ -486,7 +775,8 @@ def get_best_word(game_board, letters):
         score = play_positioned_word(game_board, pw)
 
         if score is not None:
-            found_scores.append((pw, score))
+            # TODO: expand more
+            found_scores.append((pw, score.points))
 
 
     found_scores.sort(key=lambda x: x[1], reverse=True)
@@ -598,7 +888,9 @@ def demo():
         best_word = get_best_word(game_board, my_letters)
 
         next_board = copy.deepcopy(game_board)
-        points = play_positioned_word(game_board, best_word, nxt=next_board)
+
+        res = play_positioned_word(game_board, best_word, nxt=next_board)
+        assert res is not None
 
         # remove letters
         letters_played = get_positioned_word_letters(game_board, best_word)
@@ -609,9 +901,9 @@ def demo():
         render_board(next_board)
 
         pws = playword_to_str(best_word.word)
-        print(player.name, "played word:", pws, best_word.start_pos, best_word.orientation, "Points:", points)
+        print(player.name, "played word:", pws, best_word.start_pos, best_word.orientation, "Points:", res.points)
 
-        player.points += points
+        player.points += res.points
         print("Total points:", player.points)
 
         game_board = next_board
